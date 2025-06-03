@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.venv/
+pip-freeze.txt 
+# (if you use requirements.txt, then pip-freeze.txt might be for a specific environment capture)
+
+# Environment
+.env  # CRITICAL: For your secrets!
+.env.* # For any .env.local, .env.development etc. if you use them
+
+# IDE / Editor
+.vscode/ # If you don't want to share VS Code specific settings
+.idea/   # For PyCharm users
+
+# Databases
+*.sqlite3
+*.db     # Add this if you don't want to commit your trading_orders.db
+         # (It's often good practice not to commit the DB file itself, 
+         #  but ensure your schema creation logic is committed)
+
+# Log files
+*.log
+
+# Other
+# any other temporary files or build outputs

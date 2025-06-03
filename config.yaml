@@ -1,0 +1,54 @@
+# Main application configuration
+
+# Webhook Server Settings
+webhook_server:
+  host: "0.0.0.0"
+  port: 5000
+  # WEBHOOK_SHARED_SECRET is still best sourced from .env for security
+  # The config.get('WEBHOOK_SHARED_SECRET') will retrieve it if loaded by loader.py
+
+# Oanda Settings (non-secret parts)
+oanda:
+  # OANDA_API_URL, OANDA_API_KEY, OANDA_ACCOUNT_ID are best sourced from .env
+  # The config loader ensures OANDA_API_URL from .env can override this if both are present.
+  base_url: "https://api-fxpractice.oanda.com" 
+
+# Trading Settings
+trading:
+  # List of instruments your server is configured to trade
+  # The signal_processor can use this for validation
+  allowed_instruments:
+    - "EUR_USD"
+    - "USD_JPY"
+    - "GBP_USD"
+    - "AUD_USD"
+    # Add other instruments you might test with:
+    # - "SPX500_USD" 
+    # - "XAU_USD"
+
+  defaults:
+    # Default quantity if not specified in the signal.
+    quantity: 1 # A very small default for initial safety
+    order_type: "MARKET" 
+
+  # Instrument-specific overrides for default settings
+  instrument_settings:
+    EUR_USD:
+      default_quantity: 100 # Example: larger default for EUR_USD
+      min_quantity: 1
+      max_quantity: 1000000
+    USD_JPY:
+      default_quantity: 100
+      min_quantity: 1
+      max_quantity: 1000000
+    # GBP_USD:
+    #   default_quantity: 80
+    #   min_quantity: 1
+    #   max_quantity: 1000000
+
+# Logging Configuration
+logging:
+  level: "INFO" # Options: DEBUG, INFO, WARNING, ERROR, CRITICAL
+  # Optional: if you want to log to a file later
+  # log_file: "trading_server.log" 
+  # log_format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
