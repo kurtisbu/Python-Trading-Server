@@ -35,12 +35,12 @@ trading:
   instrument_settings:
     EUR_USD:
       default_quantity: 100 # Example: larger default for EUR_USD
-      min_quantity: 1
+      min_quantity: 5
       max_quantity: 1000000
     USD_JPY:
       default_quantity: 100
       min_quantity: 1
-      max_quantity: 1000000
+      max_quantity: 1000
     # GBP_USD:
     #   default_quantity: 80
     #   min_quantity: 1
