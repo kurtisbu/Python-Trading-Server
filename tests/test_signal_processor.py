@@ -146,5 +146,40 @@ def test_process_signal_quantity_above_max():
     assert params is None
     assert f"exceeds maximum allowed ({max_qty_usd_jpy})" in err
 
-# You can add more tests based on the scenarios from your processor.py's old __main__ block
-# e.g., for invalid quantity types, zero quantity, etc.
+def test_process_signal_valid_limit_buy():
+    """Tests processing a valid limit buy signal."""
+    # This test assumes EUR_USD is an allowed instrument in your test config setup
+    signal = {
+        "instrument": "EUR_USD",
+        "action": "buy",
+        "quantity": 100,
+        "type": "limit",
+        "price": 1.0500
+    }
+
+    expected_params = {
+        "instrument": "EUR_USD",
+        "units": 100,
+        "order_type": "LIMIT",
+        "price": 1.0500
+    }
+
+    params, err = process_signal(signal)
+
+    assert err is None, f"Expected no error, but got: {err}"
+    assert params == expected_params
+
+def test_process_signal_invalid_limit_order_missing_price():
+    """Tests a limit order signal that is missing the price."""
+    signal = {
+        "instrument": "EUR_USD",
+        "action": "buy",
+        "quantity": 100,
+        "type": "limit" # No 'price' field
+    }
+
+    params, err = process_signal(signal)
+
+    assert params is None
+    assert err is not None
+    assert "Invalid or missing 'price' for LIMIT order" in err

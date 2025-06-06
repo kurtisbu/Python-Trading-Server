@@ -1,5 +1,10 @@
 # Main application configuration
 
+broker:
+  # This setting will determine which broker implementation is loaded.
+  # Future options could be "alpaca", "interactive_brokers", etc.
+  name: "oanda"
+
 # Webhook Server Settings
 webhook_server:
   host: "0.0.0.0"
@@ -15,6 +20,11 @@ oanda:
 
 # Trading Settings
 trading:
+  defaults:
+    quantity: 1
+    order_type: "MARKET"
+    # Add a default Time In Force for pending orders like LIMIT
+    time_in_force: "GTC" # Good 'Til Canceled
   # List of instruments your server is configured to trade
   # The signal_processor can use this for validation
   allowed_instruments:
@@ -25,6 +35,7 @@ trading:
     # Add other instruments you might test with:
     # - "SPX500_USD" 
     # - "XAU_USD"
+
 
   defaults:
     # Default quantity if not specified in the signal.

@@ -39,7 +39,9 @@ def process_signal(signal_data: dict):
     instrument = signal_data.get("instrument", "").upper() # Ensure instrument is uppercase for matching
     action = signal_data.get("action", "").lower()
     quantity_from_signal = signal_data.get("quantity") # Can be None
-    order_type_from_signal = signal_data.get("type", global_default_order_type).lower()
+    order_type_from_signal = signal_data.get("type", global_default_order_type).upper()
+
+    limit_price = signal_data.get("price")
 
     # 1. Validate Instrument
     if not instrument:
@@ -51,11 +53,23 @@ def process_signal(signal_data: dict):
         logger.error(error_msg)
         return None, error_msg
 
-    # 2. Validate Action
+    # 2. Validate Order Type and Price for LIMIT orders
     if action not in ["buy", "sell"]:
         error_msg = f"Invalid action: '{action}'. Must be 'buy' or 'sell'."
         logger.error(error_msg)
         return None, error_msg
+    
+    # 2.5
+    if order_type_from_signal not in ["MARKET", "LIMIT"]: # Add other types like STOP here later
+        error_msg = f"Unsupported order type: '{order_type_from_signal}'. Supported types: MARKET, LIMIT."
+        logger.error(error_msg)
+        return None, error_msg
+
+    if order_type_from_signal == "LIMIT":
+        if not isinstance(limit_price, (int, float)) or limit_price <= 0:
+            error_msg = f"Invalid or missing 'price' for LIMIT order. Received: {limit_price}"
+            logger.error(error_msg)
+            return None, error_msg
 
     # 3. Determine Quantity (use signal, then instrument-specific default, then global default)
     final_quantity = quantity_from_signal
@@ -87,31 +101,23 @@ def process_signal(signal_data: dict):
         logger.error(error_msg)
         return None, error_msg
 
-
-    # 5. Validate Order Type (for now, only market is processed for action by Oanda client)
-    if order_type_from_signal != "market":
-        # If you plan to support other types, this logic will expand.
-        # For now, our Oanda client only places market orders.
-        logger.warning(f"Signal specified order type '{order_type_from_signal}'. Current execution is for MARKET orders.")
-        # If strictly only market, you might return an error here:
-        # error_msg = f"Unsupported order type: {order_type_from_signal}. Currently only 'market' is supported."
-        # logger.error(error_msg)
-        # return None, error_msg
-        pass # Allow it to proceed as 'market' effectively if that's the only execution path
-
-
     # Convert 'buy'/'sell' and quantity to Oanda's unit convention
     units = final_quantity if action == "buy" else -final_quantity
 
     trade_parameters = {
         "instrument": instrument,
         "units": units,
-        "order_type": "MARKET" # Hardcoding to market as it's what oanda_client supports now
-                               # order_type_from_signal can be used for future logic/logging
+        "order_type": order_type_from_signal
     }
 
-    logger.info(f"Processed trade parameters: {trade_parameters} (Original signal type: {order_type_from_signal})")
+    # Conditionally add the 'price' key only for LIMIT orders.
+    if trade_parameters["order_type"] == "LIMIT":
+        trade_parameters["price"] = limit_price
+    # --- END OF FIX ---
+    
+    logger.info(f"Processed trade parameters: {trade_parameters}")
     return trade_parameters, None
+
 
 if __name__ == '__main__':
     # --- Add sys import for path adjustment when run directly ---
