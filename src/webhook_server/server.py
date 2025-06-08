@@ -12,8 +12,7 @@ import json
 import os
 import sys
 from flask import Flask, request, jsonify
-
-# --- Imports ---
+import yaml
 from config.loader import initialize_config, get as config_get
 from broker_interface import get_broker
 from signal_processor.processor import process_signal
@@ -124,6 +123,67 @@ def handle_webhook():
         update_order_with_submission_response(internal_order_id, oanda_error=str(e))
         return jsonify({"status": "error", "message": "An unexpected server error occurred"}), 500
 
+
+@app.route('/orders', methods=['POST'])
+def create_manual_order():
+    """
+    API endpoint for creating a new order manually, e.g., from a GUI.
+    This takes a structured JSON payload and processes it like a webhook signal.
+    """
+    logger.info("Received request to create a manual order.")
+
+    if not broker:
+        logger.error("CRITICAL: Broker is not initialized. Cannot process trade.")
+        return jsonify({"status": "error", "message": "Critical Server Error: Broker not initialized"}), 500
+
+    signal_data = request.get_json()
+    if not signal_data:
+        return jsonify({"status": "error", "message": "No JSON payload received."}), 400
+
+    # --- This logic is nearly identical to the webhook handler ---
+    # 1. Process the signal
+    trade_params, signal_proc_error_msg = process_signal(signal_data)
+    if signal_proc_error_msg:
+        return jsonify({"status": "error", "message": f"Signal error: {signal_proc_error_msg}"}), 400
+
+    # 2. Create the internal order record
+    internal_order_id = create_order_record(signal_data, trade_params)
+    if not internal_order_id:
+         return jsonify({"status": "error", "message": "Failed to create internal order record."}), 500
+
+    # 3. Route the order to the broker
+    try:
+        order_type = trade_params.get("order_type")
+        instrument = trade_params.get("instrument")
+        units = trade_params.get("units")
+        price = trade_params.get("price")
+        stop_loss = trade_params.get("stop_loss")
+        take_profit = trade_params.get("take_profit")
+
+        if order_type == "MARKET":
+            broker_response, broker_error = broker.place_market_order(instrument, units, stop_loss, take_profit)
+        elif order_type == "LIMIT":
+            broker_response, broker_error = broker.place_limit_order(instrument, units, price, stop_loss, take_profit)
+        elif order_type == "STOP":
+            broker_response, broker_error = broker.place_stop_order(instrument, units, price, stop_loss, take_profit)
+        else:
+            broker_error = f"Unknown order type '{order_type}'"
+            broker_response = None
+
+        update_order_with_submission_response(internal_order_id, broker_response, broker_error)
+
+        if broker_error:
+            return jsonify({"status": "error", "message": "Broker error", "broker_error": broker_error, "broker_response": broker_response}), 400
+
+        return jsonify({"status": "success", "message": "Order submitted successfully.", "internal_order_id": internal_order_id, "broker_response": broker_response}), 201 # 201 Created
+
+    except Exception as e:
+        logger.critical(f"Unexpected error during manual order execution for ID {internal_order_id}: {e}", exc_info=True)
+        update_order_with_submission_response(internal_order_id, oanda_error=str(e)) # Note: key is 'oanda_error'
+        return jsonify({"status": "error", "message": "An unexpected server error occurred"}), 500
+
+
+
 # The health check can stay, it's a simple route.
 @app.route('/health', methods=['GET'])
 def health_check():
@@ -232,6 +292,65 @@ def get_instrument_position(instrument_name):
     except Exception as e:
         logger.error(f"Error retrieving position for {instrument_sanitized}: {e}", exc_info=True)
         return jsonify({"status": "error", "message": "An error occurred while retrieving position."}), 500
+
+
+
+@app.route('/config', methods=['GET'])
+def get_config():
+    """API endpoint to fetch the current application configuration."""
+    logger.info("Request to fetch configuration.")
+    try:
+        # We use the config_get from our loader, which holds the loaded config in memory.
+        # This is safer than reading the file directly each time.
+        # The loader's internal '_config' variable holds the YAML part.
+        from config.loader import _config as current_config
+        if current_config:
+            return jsonify({"status": "success", "config": current_config}), 200
+        else:
+            return jsonify({"status": "error", "message": "Configuration not loaded."}), 500
+    except Exception as e:
+        logger.error(f"Error fetching configuration: {e}", exc_info=True)
+        return jsonify({"status": "error", "message": "An error occurred while fetching configuration."}), 500
+
+
+@app.route('/config', methods=['POST'])
+def update_config():
+    """API endpoint to update and save the application configuration."""
+    logger.info("Request to update configuration.")
+
+    new_config_data = request.get_json()
+    if not new_config_data:
+        return jsonify({"status": "error", "message": "No JSON payload received."}), 400
+
+    try:
+        # IMPORTANT: In a real production app, you would add extensive validation here
+        # to ensure the new configuration is valid before saving. For now, we'll save it directly.
+
+        # Get the path to config.yaml from our config loader
+        from config.loader import CONFIG_FILE_PATH
+
+        # Write the new configuration to the config.yaml file
+        with open(CONFIG_FILE_PATH, 'w') as f:
+            yaml.dump(new_config_data, f, default_flow_style=False, sort_keys=False)
+
+        logger.info(f"Configuration successfully saved to {CONFIG_FILE_PATH}")
+
+        # Now, tell the running application to reload its configuration
+        from config.loader import initialize_config
+        initialize_config(force_reload=True) # We need to add 'force_reload' to our loader
+
+        # You might need to re-initialize other components that depend on config at startup,
+        # like the broker instance. This is an advanced topic (service reloading).
+        # For now, we will notify the user that a restart might be needed for some changes.
+
+        return jsonify({
+            "status": "success",
+            "message": "Configuration saved. Some changes may require a server restart to take full effect."
+        }), 200
+
+    except Exception as e:
+        logger.error(f"Error updating configuration: {e}", exc_info=True)
+        return jsonify({"status": "error", "message": "An error occurred while updating configuration."}), 500
 
 
 # --- Main Execution Block ---

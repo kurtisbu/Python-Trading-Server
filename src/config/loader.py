@@ -79,7 +79,7 @@ def _merge_configs(yaml_conf, env_conf):
     # The get() method will decide where to look.
     return yaml_conf # Keep _config as the primarily YAML-loaded structure
 
-def initialize_config(config_path=None, env_path=None):
+def initialize_config(config_path=None, env_path=None, force_reload: bool = False): # <-- Add force_reload
     """
     Initializes the configuration by loading YAML and .env files.
     This should be called once at application startup.
@@ -89,26 +89,28 @@ def initialize_config(config_path=None, env_path=None):
     cfg_path = config_path or CONFIG_FILE_PATH
     e_path = env_path or ENV_FILE_PATH
 
-    if _config is None: # Load only once
-        logger.info(f"Initializing configuration from YAML: {cfg_path} and .env: {e_path}")
-        _env_vars = _load_env_vars(e_path) # Load .env first
-        yaml_data = _load_yaml_config(cfg_path)
-        _config = _merge_configs(yaml_data, _env_vars) # For now, merge is just assigning yaml_data
+    # --- UPDATE THIS LOGIC ---
+    # Load only once, unless force_reload is True
+    if _config is None or force_reload:
+        if force_reload:
+            logger.info(f"Forcing configuration reload from YAML: {cfg_path} and .env: {e_path}")
+        else:
+            logger.info(f"Initializing configuration from YAML: {cfg_path} and .env: {e_path}")
 
-        # Example: If OANDA_API_URL from .env should override one in YAML
-        # This shows a more direct merge strategy for specific keys if needed.
+        # ... (the rest of the function logic remains the same) ...
+        _env_vars = _load_env_vars(e_path)
+        yaml_data = _load_yaml_config(cfg_path)
+        _config = _merge_configs(yaml_data, _env_vars)
+
         if "oanda" not in _config and "OANDA_API_URL" in _env_vars:
-             _config["oanda"] = {} # Ensure section exists
+             _config["oanda"] = {}
         if "OANDA_API_URL" in _env_vars and _config.get("oanda", {}).get("base_url") != _env_vars["OANDA_API_URL"]:
             logger.info(f"Overriding oanda.base_url from YAML with OANDA_API_URL from .env: '{_env_vars['OANDA_API_URL']}'")
             _config["oanda"]["base_url"] = _env_vars["OANDA_API_URL"]
         elif "oanda" in _config and "base_url" not in _config["oanda"] and "OANDA_API_URL" in _env_vars:
             _config["oanda"]["base_url"] = _env_vars["OANDA_API_URL"]
 
-
-        logger.info("Configuration initialized.")
-        # logger.debug(f"Final effective config (YAML part): {_config}")
-        # logger.debug(f"Final effective .env vars captured: {_env_vars}")
+        logger.info("Configuration initialized/reloaded.")
 
     return _config
 

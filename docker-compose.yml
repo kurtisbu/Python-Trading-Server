@@ -1,31 +1,45 @@
 # docker-compose.yml
 
-version: '3.8' # Specifies the version of the Docker Compose file format
-
 services:
-  # Define our trading server service
+  # --- The Backend Trading Server Service ---
   trading-server:
-    # Tells Compose to build the image from the Dockerfile in the current directory (.)
-    build: .
-    # The name of the container once it's running
-    container_name: trading_server_app
-    # Automatically restart the container if it stops for any reason
+    build:
+      context: .
+      # Target the 'backend' stage in our multi-stage Dockerfile
+      target: backend
+    container_name: trading_server_api
     restart: unless-stopped
-    # Port mapping: <HOST_PORT>:<CONTAINER_PORT>
-    # This maps port 5000 on your local machine to port 5000 inside the container.
     ports:
+      # Expose the API on port 5000
       - "5000:5000"
-    # Volumes: This is how we link files from our host machine into the container.
-    # It's crucial for configuration, secrets, and persisting our database.
     volumes:
-      # Mount the local .env file to /app/.env inside the container (read-only).
+      # Mount secrets, config, and the database for persistence
       - ./.env:/app/.env:ro
-      # Mount the local config.yaml to /app/config.yaml. This lets you change the
-      # config without rebuilding the image.
       - ./config.yaml:/app/config.yaml
-      # Mount a directory on the host to persist the SQLite database file.
-      # We create a 'data' directory on our host to store the database.
       - ./data:/app/data
-    # Environment variables can also be passed in here, but we use volumes for .env
-    # environment:
-    #   - SOME_OTHER_VARIABLE=some_value
+      # Mount the src directory to see code changes without rebuilding (for development)
+      - ./src:/app/src
+
+  # --- The Frontend Dashboard Service ---
+  dashboard-gui:
+    build:
+      context: .
+      # Target the 'frontend' stage in our multi-stage Dockerfile
+      target: frontend
+    container_name: trading_server_gui
+    restart: unless-stopped
+    ports:
+      # Expose the Streamlit dashboard on port 8501
+      - "8501:8501"
+    volumes:
+      # Mount the dashboard script to see changes without rebuilding
+      - ./dashboard.py:/app/dashboard.py
+      - ./pages:/app/pages
+    environment:
+      # Pass the internal API URL to the dashboard container.
+      # 'trading-server' is the name of our backend service defined above.
+      # Docker's internal DNS will resolve this to the backend's container IP.
+      - API_URL=http://trading-server:5000
+    # This tells Docker to start the trading-server *before* starting the dashboard.
+    depends_on:
+      - trading-server

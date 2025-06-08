@@ -1,40 +1,45 @@
-# Dockerfile
+# Dockerfile (Multi-Stage)
 
-# --- Base Image ---
-# Start from an official, lightweight Python image.
-# Using a specific version is good practice for reproducibility.
-FROM python:3.11-slim
+# --- Stage 1: The "base" image with all dependencies ---
+# We give this stage a name: 'base'
+FROM python:3.11-slim AS base
 
-# --- Environment Variables ---
-# Set environment variables for the container.
-# Tells Python not to buffer stdout/stderr, making logs appear immediately.
+# Set common environment variables
 ENV PYTHONUNBUFFERED 1
-# Sets the working directory inside the container.
 ENV APP_HOME /app
 WORKDIR $APP_HOME
 
-# --- Install Dependencies ---
-# Copy only the requirements file first. This leverages Docker's layer caching.
-# If requirements.txt doesn't change, Docker won't re-run this layer, speeding up future builds.
+# Install all dependencies from requirements.txt
 COPY requirements.txt .
-
-# Install the Python dependencies from requirements.txt.
 RUN pip install --no-cache-dir -r requirements.txt
 
-# --- Copy Application Code ---
-# Copy the 'src' directory from your local machine into the container's working directory.
-# The first '.' means the 'src' folder itself.
-COPY ./src ./src
 
-# Copy the configuration file.
+# --- Stage 2: The "backend" service image ---
+# This stage starts from our 'base' image, so it already has all dependencies
+FROM base AS backend
+
+# Copy only the files needed for the backend
+WORKDIR $APP_HOME
+COPY ./src ./src
 COPY config.yaml .
 
-# --- Expose Port ---
-# Inform Docker that the container listens on port 5000 at runtime.
-# This is for documentation; the actual port mapping is done in docker-compose.
+# Expose the backend's port
 EXPOSE 5000
 
-# --- Run Command ---
-# The command to run when the container starts.
-# We use the '-m' flag to run the server as a module, which is robust for imports.
+# The command to run the backend server
 CMD ["python", "-m", "src.webhook_server.server"]
+
+
+# --- Stage 3: The "frontend" dashboard image ---
+# This stage ALSO starts from our 'base' image
+FROM base AS frontend
+
+# Copy only the file needed for the frontend
+WORKDIR $APP_HOME
+COPY dashboard.py .
+
+# Expose the dashboard's default port
+EXPOSE 8501
+
+# The command to run the Streamlit dashboard
+CMD ["streamlit", "run", "dashboard.py", "--server.port=8501", "--server.address=0.0.0.0"]
