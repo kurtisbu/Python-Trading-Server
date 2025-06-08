@@ -12,7 +12,14 @@ logger = logging.getLogger(__name__)
 # This assumes manager.py is in src/order_management/
 PROJECT_ROOT_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 DATABASE_NAME = "trading_orders.db"
-DATABASE_PATH = os.path.join(PROJECT_ROOT_DIR, DATABASE_NAME)
+if os.environ.get("APP_HOME") == "/app":
+    # We are in Docker, save DB inside the mounted /app/data volume
+    DATA_DIR = os.path.join(os.environ.get("APP_HOME"), "data")
+    os.makedirs(DATA_DIR, exist_ok=True) # Ensure data directory exists inside container
+    DATABASE_PATH = os.path.join(DATA_DIR, DATABASE_NAME)
+else:
+    # We are not in Docker, use the project root
+    DATABASE_PATH = os.path.join(PROJECT_ROOT_DIR, DATABASE_NAME)
 
 def get_db_connection():
     """Establishes a connection to the SQLite database."""

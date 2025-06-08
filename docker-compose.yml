@@ -1,0 +1,31 @@
+# docker-compose.yml
+
+version: '3.8' # Specifies the version of the Docker Compose file format
+
+services:
+  # Define our trading server service
+  trading-server:
+    # Tells Compose to build the image from the Dockerfile in the current directory (.)
+    build: .
+    # The name of the container once it's running
+    container_name: trading_server_app
+    # Automatically restart the container if it stops for any reason
+    restart: unless-stopped
+    # Port mapping: <HOST_PORT>:<CONTAINER_PORT>
+    # This maps port 5000 on your local machine to port 5000 inside the container.
+    ports:
+      - "5000:5000"
+    # Volumes: This is how we link files from our host machine into the container.
+    # It's crucial for configuration, secrets, and persisting our database.
+    volumes:
+      # Mount the local .env file to /app/.env inside the container (read-only).
+      - ./.env:/app/.env:ro
+      # Mount the local config.yaml to /app/config.yaml. This lets you change the
+      # config without rebuilding the image.
+      - ./config.yaml:/app/config.yaml
+      # Mount a directory on the host to persist the SQLite database file.
+      # We create a 'data' directory on our host to store the database.
+      - ./data:/app/data
+    # Environment variables can also be passed in here, but we use volumes for .env
+    # environment:
+    #   - SOME_OTHER_VARIABLE=some_value

@@ -1,0 +1,32 @@
+# .dockerignore
+
+# Git
+.git
+.gitignore
+
+# Docker
+Dockerfile
+.dockerignore
+docker-compose.yml
+
+# Python virtual environment and cache
+.venv
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# IDE and OS specific
+.idea/
+.vscode/
+*.DS_Store
+
+# Local instance data
+*.db
+*.db-journal
+*.log
+.env
+
+# Test files (optional, but good practice for a production image)
+tests/
