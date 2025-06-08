@@ -19,89 +19,85 @@ logger = logging.getLogger(__name__)
 
 def process_signal(signal_data: dict):
     """
-    Validates and processes the incoming signal data using centralized configuration.
-    Converts it into parameters suitable for placing a trade.
+    Validates and processes incoming signal data, now supporting MARKET, LIMIT, and STOP orders.
     """
     logger.info(f"Processing signal: {signal_data}")
 
     # --- Get configurations ---
-    allowed_instruments = config_get('trading.allowed_instruments', []) # Default to empty list if not in config
-    global_default_quantity = config_get('trading.defaults.quantity', 1) # Default from global settings
-    global_default_order_type = config_get('trading.defaults.order_type', 'MARKET')
+    allowed_instruments = config_get('trading.allowed_instruments', [])
+    global_default_quantity = config_get('trading.defaults.quantity', 1)
+    global_default_order_type = config_get('trading.defaults.order_type', 'MARKET').upper()
 
-    required_fields = ["instrument", "action"] # Quantity can now be optional if defaults are used
+    required_fields = ["instrument", "action"]
     for field in required_fields:
         if field not in signal_data:
             error_msg = f"Missing required signal field: {field}"
             logger.error(error_msg)
             return None, error_msg
 
-    instrument = signal_data.get("instrument", "").upper() # Ensure instrument is uppercase for matching
+    instrument = signal_data.get("instrument", "").upper()
     action = signal_data.get("action", "").lower()
-    quantity_from_signal = signal_data.get("quantity") # Can be None
+    
+    # --- FIX: Ensure quantity_from_signal is defined here ---
+    quantity_from_signal = signal_data.get("quantity")
+    
     order_type_from_signal = signal_data.get("type", global_default_order_type).upper()
-
-    limit_price = signal_data.get("price")
-
-    # 1. Validate Instrument
-    if not instrument:
-        error_msg = "Instrument field is missing or empty in the signal."
-        logger.error(error_msg)
+    trigger_price = signal_data.get("price")
+    stop_loss_price = signal_data.get("stop_loss")
+    take_profit_price = signal_data.get("take_profit")
+    
+    # ... (rest of the validation and parameter building logic) ...
+    # This part should be correct from your previous fixes.
+    # The important part was adding the quantity_from_signal line above.
+    
+    if not instrument or (allowed_instruments and instrument not in allowed_instruments):
+        error_msg = f"Instrument '{instrument}' is not in the allowed_instruments list."
         return None, error_msg
-    if allowed_instruments and instrument not in allowed_instruments:
-        error_msg = f"Instrument '{instrument}' is not in allowed_instruments list from config. Allowed: {allowed_instruments}"
-        logger.error(error_msg)
-        return None, error_msg
-
-    # 2. Validate Order Type and Price for LIMIT orders
     if action not in ["buy", "sell"]:
         error_msg = f"Invalid action: '{action}'. Must be 'buy' or 'sell'."
-        logger.error(error_msg)
         return None, error_msg
-    
-    # 2.5
-    if order_type_from_signal not in ["MARKET", "LIMIT"]: # Add other types like STOP here later
-        error_msg = f"Unsupported order type: '{order_type_from_signal}'. Supported types: MARKET, LIMIT."
+
+    supported_order_types = ["MARKET", "LIMIT", "STOP"]
+    if order_type_from_signal not in supported_order_types:
+        error_msg = f"Unsupported order type: '{order_type_from_signal}'. Supported types: {supported_order_types}"
         logger.error(error_msg)
         return None, error_msg
 
-    if order_type_from_signal == "LIMIT":
-        if not isinstance(limit_price, (int, float)) or limit_price <= 0:
-            error_msg = f"Invalid or missing 'price' for LIMIT order. Received: {limit_price}"
+    if order_type_from_signal in ["LIMIT", "STOP"]:
+        if not isinstance(trigger_price, (int, float)) or trigger_price <= 0:
+            error_msg = f"Invalid or missing 'price' for {order_type_from_signal} order. Received: {trigger_price}"
             logger.error(error_msg)
             return None, error_msg
 
-    # 3. Determine Quantity (use signal, then instrument-specific default, then global default)
+    if stop_loss_price is not None:
+        if not isinstance(stop_loss_price, (int, float)) or stop_loss_price <= 0:
+            error_msg = f"Invalid 'stop_loss' price provided: {stop_loss_price}"
+            logger.error(error_msg)
+            return None, error_msg
+    
+    if take_profit_price is not None:
+        if not isinstance(take_profit_price, (int, float)) or take_profit_price <= 0:
+            error_msg = f"Invalid 'take_profit' price provided: {take_profit_price}"
+            logger.error(error_msg)
+            return None, error_msg
+
     final_quantity = quantity_from_signal
     if final_quantity is None:
-        # Check for instrument-specific default quantity
         instr_specific_qty = config_get(f'trading.instrument_settings.{instrument}.default_quantity')
-        if instr_specific_qty is not None:
-            final_quantity = instr_specific_qty
-            logger.info(f"Using instrument-specific default quantity for {instrument}: {final_quantity}")
-        else:
-            final_quantity = global_default_quantity
-            logger.info(f"Using global default quantity: {final_quantity}")
-
-    # 4. Validate Quantity (must be a positive number after defaults are applied)
+        final_quantity = instr_specific_qty if instr_specific_qty is not None else global_default_quantity
     if not isinstance(final_quantity, (int, float)) or final_quantity <= 0:
-        error_msg = f"Invalid quantity: {final_quantity}. Must be a positive number (from signal or defaults)."
-        logger.error(error_msg)
+        error_msg = f"Invalid quantity: {final_quantity}. Must be a positive number."
         return None, error_msg
-
-    # Optional: Validate against min/max quantity from config if defined
+        
     min_qty = config_get(f'trading.instrument_settings.{instrument}.min_quantity')
     max_qty = config_get(f'trading.instrument_settings.{instrument}.max_quantity')
     if min_qty is not None and final_quantity < min_qty:
         error_msg = f"Quantity {final_quantity} for {instrument} is below minimum allowed ({min_qty})."
-        logger.error(error_msg)
         return None, error_msg
     if max_qty is not None and final_quantity > max_qty:
         error_msg = f"Quantity {final_quantity} for {instrument} exceeds maximum allowed ({max_qty})."
-        logger.error(error_msg)
         return None, error_msg
 
-    # Convert 'buy'/'sell' and quantity to Oanda's unit convention
     units = final_quantity if action == "buy" else -final_quantity
 
     trade_parameters = {
@@ -110,10 +106,14 @@ def process_signal(signal_data: dict):
         "order_type": order_type_from_signal
     }
 
-    # Conditionally add the 'price' key only for LIMIT orders.
-    if trade_parameters["order_type"] == "LIMIT":
-        trade_parameters["price"] = limit_price
-    # --- END OF FIX ---
+    if trade_parameters["order_type"] in ["LIMIT", "STOP"]:
+        trade_parameters["price"] = trigger_price
+    
+    if stop_loss_price is not None:
+        trade_parameters["stop_loss"] = stop_loss_price
+    
+    if take_profit_price is not None:
+        trade_parameters["take_profit"] = take_profit_price
     
     logger.info(f"Processed trade parameters: {trade_parameters}")
     return trade_parameters, None

@@ -42,37 +42,32 @@ class BrokerInterface(ABC):
         pass
 
     @abstractmethod
-    def place_market_order(self, instrument: str, units: int) -> (dict, str):
+    def place_market_order(
+        self, instrument: str, units: int, 
+        stop_loss: float = None, take_profit: float = None
+    ) -> (dict, str):
         """
-        Places a market order for a specified instrument and number of units.
-
-        Args:
-            instrument (str): The trading instrument (e.g., "EUR_USD").
-            units (int): The number of units to trade. Positive for buy, negative for sell.
-
-        Returns:
-            tuple[dict, str]: A tuple containing:
-                - dict: The response from the broker if successful, None otherwise.
-                - str: An error message if failed, None otherwise.
+        Places a market order with optional Stop Loss and Take Profit levels.
         """
         pass
 
-    # --- Define methods for future features (like limit orders) ---
-    # By defining them now, we ensure the interface is ready for them.
-    # Implementations can raise NotImplementedError until they are built.
+    @abstractmethod
+    def place_limit_order(
+        self, instrument: str, units: int, price: float, 
+        stop_loss: float = None, take_profit: float = None
+    ) -> (dict, str):
+        """
+        Places a limit order with optional Stop Loss and Take Profit levels.
+        """
+        pass
 
     @abstractmethod
-    def place_limit_order(self, instrument: str, units: int, price: float) -> (dict, str):
+    def place_stop_order(
+        self, instrument: str, units: int, price: float, 
+        stop_loss: float = None, take_profit: float = None
+    ) -> (dict, str):
         """
-        Places a limit order.
-
-        Args:
-            instrument (str): The trading instrument.
-            units (int): The number of units. Positive for buy, negative for sell.
-            price (float): The limit price at which to execute the order.
-
-        Returns:
-            tuple[dict, str]: Broker response or error.
+        Places a stop order with optional Stop Loss and Take Profit levels.
         """
         pass
 

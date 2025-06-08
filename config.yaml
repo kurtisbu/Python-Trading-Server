@@ -1,65 +1,53 @@
 # Main application configuration
 
+# This setting now acts as a switch to select the active broker.
+# Change this to "alpaca" when you want to run with the Alpaca broker.
 broker:
-  # This setting will determine which broker implementation is loaded.
-  # Future options could be "alpaca", "interactive_brokers", etc.
-  name: "oanda"
+  name: "alpaca" 
 
-# Webhook Server Settings
+# A new top-level section to hold settings for each specific broker.
+brokers:
+  oanda:
+    # OANDA_API_URL from .env will override this if present.
+    base_url: "https://api-fxpractice.oanda.com"
+
+  alpaca:
+    # Alpaca's URL for paper trading.
+    base_url: "https://paper-api.alpaca.markets"
+    # We can add other Alpaca-specific settings here in the future.
+
+# --- The rest of your configuration remains the same ---
+
 webhook_server:
   host: "0.0.0.0"
   port: 5000
-  # WEBHOOK_SHARED_SECRET is still best sourced from .env for security
-  # The config.get('WEBHOOK_SHARED_SECRET') will retrieve it if loaded by loader.py
 
-# Oanda Settings (non-secret parts)
-oanda:
-  # OANDA_API_URL, OANDA_API_KEY, OANDA_ACCOUNT_ID are best sourced from .env
-  # The config loader ensures OANDA_API_URL from .env can override this if both are present.
-  base_url: "https://api-fxpractice.oanda.com" 
-
-# Trading Settings
 trading:
+  # NOTE: These instruments are forex pairs for Oanda. When using Alpaca,
+  # you will need to change these to stock tickers (e.g., "AAPL", "TSLA").
+  allowed_instruments:
+    - "AAPL"
+    - "TSLA"
+    - "GOOGL"
+
   defaults:
     quantity: 1
     order_type: "MARKET"
-    # Add a default Time In Force for pending orders like LIMIT
-    time_in_force: "GTC" # Good 'Til Canceled
-  # List of instruments your server is configured to trade
-  # The signal_processor can use this for validation
-  allowed_instruments:
-    - "EUR_USD"
-    - "USD_JPY"
-    - "GBP_USD"
-    - "AUD_USD"
-    # Add other instruments you might test with:
-    # - "SPX500_USD" 
-    # - "XAU_USD"
+    time_in_force: "GTC" 
 
-
-  defaults:
-    # Default quantity if not specified in the signal.
-    quantity: 1 # A very small default for initial safety
-    order_type: "MARKET" 
-
-  # Instrument-specific overrides for default settings
   instrument_settings:
     EUR_USD:
-      default_quantity: 100 # Example: larger default for EUR_USD
-      min_quantity: 5
+      default_quantity: 1000
+      min_quantity: 10
       max_quantity: 1000000
+      default_stop_loss_pips: 20
+      default_take_profit_pips: 40
     USD_JPY:
-      default_quantity: 100
+      default_quantity: 1000
       min_quantity: 1
       max_quantity: 1000
-    # GBP_USD:
-    #   default_quantity: 80
-    #   min_quantity: 1
-    #   max_quantity: 1000000
+      default_stop_loss_pips: 20
+      default_take_profit_pips: 40
 
-# Logging Configuration
 logging:
-  level: "INFO" # Options: DEBUG, INFO, WARNING, ERROR, CRITICAL
-  # Optional: if you want to log to a file later
-  # log_file: "trading_server.log" 
-  # log_format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+  level: "INFO"

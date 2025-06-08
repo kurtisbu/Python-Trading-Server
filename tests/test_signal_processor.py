@@ -88,7 +88,7 @@ def test_process_signal_invalid_instrument():
 
     assert err is not None, "Expected an error for invalid instrument, but got None"
     assert params is None, "Expected no parameters for invalid instrument"
-    assert "is not in allowed_instruments list" in err # Check for specific error message part
+    assert "not in the allowed_instruments list" in err # Check for specific error message part
 
 def test_process_signal_invalid_action():
     """Tests signal with an invalid action."""
@@ -183,3 +183,41 @@ def test_process_signal_invalid_limit_order_missing_price():
     assert params is None
     assert err is not None
     assert "Invalid or missing 'price' for LIMIT order" in err
+
+def test_process_signal_valid_stop_buy():
+    """Tests processing a valid stop buy signal."""
+    # A buy stop order is placed above the current price to catch a breakout
+    signal = {
+        "instrument": "EUR_USD",
+        "action": "buy",
+        "quantity": 100,
+        "type": "stop",
+        "price": 1.0950
+    }
+
+    expected_params = {
+        "instrument": "EUR_USD",
+        "units": 100,
+        "order_type": "STOP",
+        "price": 1.0950
+    }
+
+    params, err = process_signal(signal)
+
+    assert err is None, f"Expected no error, but got: {err}"
+    assert params == expected_params
+
+def test_process_signal_invalid_stop_order_missing_price():
+    """Tests a stop order signal that is missing the price."""
+    signal = {
+        "instrument": "EUR_USD",
+        "action": "buy",
+        "quantity": 100,
+        "type": "stop" # No 'price' field
+    }
+
+    params, err = process_signal(signal)
+
+    assert params is None
+    assert err is not None
+    assert "Invalid or missing 'price' for STOP order" in err

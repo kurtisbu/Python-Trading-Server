@@ -52,7 +52,9 @@ def _load_env_vars(env_path):
         "OANDA_API_KEY", 
         "OANDA_ACCOUNT_ID",
         "WEBHOOK_SHARED_SECRET",
-        "OANDA_API_URL" # If you decide to keep this in .env for easy override
+        "OANDA_API_URL",
+        "ALPACA_API_KEY_ID",
+        "ALPACA_API_SECRET_KEY"
     ]
     for key in env_keys_to_capture:
         value = os.getenv(key)

@@ -6,7 +6,7 @@ SRC_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # Add it to the beginning of the Python path
 if SRC_DIR not in sys.path:
     sys.path.insert(0, SRC_DIR)
-    
+
 import logging
 import json
 import os
@@ -21,7 +21,7 @@ from order_management.manager import (
     create_order_record, update_order_with_submission_response,
     get_order_by_id, get_all_orders, initialize_database as initialize_order_db
 )
-
+from position_management.manager import get_position, get_all_positions
 # --- App and Config Initialization ---
 initialize_config()
 app = Flask(__name__)
@@ -59,22 +59,66 @@ def handle_webhook():
     if signal_proc_error_msg:
         return jsonify({"status": "error", "message": f"Signal error: {signal_proc_error_msg}"}), 400
     internal_order_id = create_order_record(signal_data, trade_params)
+    broker_response = None
+    broker_error = None
     try:
+        # Extract all potential parameters from the processed signal
         order_type = trade_params.get("order_type")
         instrument = trade_params.get("instrument")
         units = trade_params.get("units")
+        price = trade_params.get("price") # For LIMIT/STOP orders
+        stop_loss = trade_params.get("stop_loss") # NEW
+        take_profit = trade_params.get("take_profit") # NEW
+
+        if not all([order_type, instrument, units is not None]):
+            err_msg = "Internal error: Missing order_type, instrument, or units after processing."
+            # ... (error handling as before) ...
+            return jsonify({"status": "error", "message": err_msg, "internal_order_id": internal_order_id}), 500
+
+        # --- Updated Order Routing Logic ---
         if order_type == "MARKET":
-            broker_response, broker_error = broker.place_market_order(instrument=instrument, units=units)
+            logger.info(f"Routing to place_market_order for internal ID {internal_order_id} with SL/TP.")
+            broker_response, broker_error = broker.place_market_order(
+                instrument=instrument,
+                units=units,
+                stop_loss=stop_loss,
+                take_profit=take_profit
+            )
         elif order_type == "LIMIT":
-            price = trade_params.get("price")
-            broker_response, broker_error = broker.place_limit_order(instrument=instrument, units=units, price=price)
+            if not price:
+                # ... (error handling as before) ...
+                return jsonify({"status": "error", "message": "Internal error: Missing price for LIMIT order"}), 500
+            logger.info(f"Routing to place_limit_order for internal ID {internal_order_id} with SL/TP.")
+            broker_response, broker_error = broker.place_limit_order(
+                instrument=instrument,
+                units=units,
+                price=price,
+                stop_loss=stop_loss,
+                take_profit=take_profit
+            )
+        elif order_type == "STOP":
+            if not price:
+                # ... (error handling as before) ...
+                return jsonify({"status": "error", "message": "Internal error: Missing price for STOP order"}), 500
+            logger.info(f"Routing to place_stop_order for internal ID {internal_order_id} with SL/TP.")
+            broker_response, broker_error = broker.place_stop_order(
+                instrument=instrument,
+                units=units,
+                price=price,
+                stop_loss=stop_loss,
+                take_profit=take_profit
+            )
         else:
-            broker_error = f"Unknown order type '{order_type}'"
+            broker_error = f"Unknown order type '{order_type}' cannot be routed."
             broker_response = None
+        # --- END of Updated Logic ---
+
+        # ... (The rest of the function for handling the response and errors remains the same) ...
         update_order_with_submission_response(internal_order_id, broker_response, broker_error)
         if broker_error:
             return jsonify({"status": "error", "message": "Broker error", "broker_error": broker_error}), 500
         return jsonify({"status": "success", "internal_order_id": internal_order_id, "broker_response": broker_response}), 200
+
     except Exception as e:
         logger.critical(f"Unexpected error during trade execution for ID {internal_order_id}: {e}", exc_info=True)
         update_order_with_submission_response(internal_order_id, oanda_error=str(e))
@@ -97,6 +141,98 @@ def get_specific_order(order_id):
         return jsonify({"status": "success", "order": order}), 200
     else:
         return jsonify({"status": "error", "message": "Order not found"}), 404
+
+@app.route('/orders/<string:internal_order_id>/cancel', methods=['POST'])
+def cancel_specific_order(internal_order_id):
+    """
+    API endpoint to cancel a specific pending order.
+    """
+    logger.info(f"Received request to cancel order with internal ID: {internal_order_id}")
+
+    if not broker:
+        logger.error("CRITICAL: Broker is not initialized. Cannot process cancellation.")
+        return jsonify({"status": "error", "message": "Critical Server Error: Broker not initialized"}), 500
+
+    # 1. Fetch our internal record of the order
+    order_to_cancel = get_order_by_id(internal_order_id)
+    if not order_to_cancel:
+        logger.warning(f"Cancellation failed: No order found with internal ID {internal_order_id}")
+        return jsonify({"status": "error", "message": "Order not found"}), 404
+
+    # 2. Validate that the order can be cancelled
+    oanda_order_id = order_to_cancel.get("oanda_order_id")
+    if not oanda_order_id:
+        msg = "Cancellation failed: Order has no broker-assigned ID (it may have failed on initial submission)."
+        logger.error(msg)
+        return jsonify({"status": "error", "message": msg}), 400
+
+    cancelable_stuses = ["ORDER_ACCEPTED", "PENDING_FILL"] # Define states that can be cancelled
+    if order_to_cancel.get("status") not in cancelable_stuses:
+        msg = f"Cancellation failed: Order is not in a cancelable state. Current status: {order_to_cancel.get('status')}"
+        logger.warning(msg)
+        return jsonify({"status": "error", "message": msg}), 400 # 400 Bad Request or 409 Conflict
+
+    # 3. Call the broker to cancel the order
+    cancellation_response, broker_error = broker.cancel_order(oanda_order_id)
+
+    # 4. Update our internal record with the result
+    # The update_order_with_submission_response function already knows how to handle
+    # an orderCancelTransaction from the broker, so we can reuse it.
+    update_order_with_submission_response(internal_order_id, cancellation_response, broker_error)
+
+    if broker_error:
+        logger.error(f"Broker failed to cancel order {oanda_order_id}: {broker_error}")
+        return jsonify({
+            "status": "error",
+            "message": "Broker returned an error during cancellation.",
+            "broker_error": broker_error
+        }), 500
+
+    logger.info(f"Successfully processed cancellation for order {internal_order_id}")
+    return jsonify({
+        "status": "success",
+        "message": f"Cancellation request for order {internal_order_id} processed.",
+        "broker_response": cancellation_response
+    }), 200
+
+@app.route('/positions', methods=['GET'])
+def list_all_positions():
+    """
+    API endpoint to retrieve all non-flat portfolio positions.
+    """
+    logger.info("Request to list all current positions.")
+    try:
+        all_positions = get_all_positions()
+        return jsonify({
+            "status": "success",
+            "positions": all_positions
+        }), 200
+    except Exception as e:
+        logger.error(f"Error retrieving all positions: {e}", exc_info=True)
+        return jsonify({"status": "error", "message": "An error occurred while retrieving positions."}), 500
+
+
+@app.route('/positions/<string:instrument_name>', methods=['GET'])
+def get_instrument_position(instrument_name):
+    """
+    API endpoint to retrieve the net position for a specific instrument.
+    """
+    # Instrument names can contain underscores, so they are valid URL parts.
+    # We'll sanitize it by converting to uppercase to match our internal format.
+    instrument_sanitized = instrument_name.upper()
+    logger.info(f"Request for position of instrument: {instrument_sanitized}")
+
+    try:
+        net_position = get_position(instrument_sanitized)
+        return jsonify({
+            "status": "success",
+            "instrument": instrument_sanitized,
+            "net_position": net_position
+        }), 200
+    except Exception as e:
+        logger.error(f"Error retrieving position for {instrument_sanitized}: {e}", exc_info=True)
+        return jsonify({"status": "error", "message": "An error occurred while retrieving position."}), 500
+
 
 # --- Main Execution Block ---
 

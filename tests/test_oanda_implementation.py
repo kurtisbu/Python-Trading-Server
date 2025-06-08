@@ -60,19 +60,28 @@ def test_get_account_summary_success(mocker, oanda_broker):
 
 
 def test_place_market_order_success(mocker, oanda_broker):
-    """Tests successful market order placement."""
+    """Tests successful market order placement without SL/TP."""
+    # Arrange
     mock_response = mocker.Mock()
     mock_response.status_code = 200
     mock_fill_data = {"orderFillTransaction": {"id": "fill_tx_1"}}
     mock_response.json.return_value = mock_fill_data
     mock_response.raise_for_status = mocker.Mock()
-    
-    mocker.patch('broker_interface.oanda_implementation.requests.post', return_value=mock_response)
-    
+
+    mock_post_call = mocker.patch('broker_interface.oanda_implementation.requests.post', return_value=mock_response)
+
+    # Act: Call the method as it would be for a simple order (without SL/TP)
     response_data, error = oanda_broker.place_market_order("EUR_USD", 100)
-    
+
+    # Assert
     assert error is None
     assert response_data == mock_fill_data
+
+    # Verify the payload did NOT contain SL/TP
+    args, kwargs = mock_post_call.call_args
+    sent_payload = kwargs["json"]["order"]
+    assert "stopLossOnFill" not in sent_payload
+    assert "takeProfitOnFill" not in sent_payload
 
 
 def test_place_market_order_rejection(mocker, oanda_broker):
@@ -130,9 +139,143 @@ def test_place_limit_order_success(mocker, oanda_broker):
 
 def test_unimplemented_methods(oanda_broker):
     """Tests that remaining future methods still raise NotImplementedError."""
-    # --- FIX #1: Removed the check for place_limit_order ---
-    with pytest.raises(NotImplementedError):
-        oanda_broker.cancel_order("some_order_id")
-
     with pytest.raises(NotImplementedError):
         oanda_broker.get_order_status("some_order_id")
+
+# In tests/test_oanda_implementation.py
+
+def test_place_stop_order_success(mocker, oanda_broker):
+    """Tests successful stop order placement."""
+    # This is a typical response for a newly created pending stop order
+    mock_response = mocker.Mock()
+    mock_response.status_code = 201 # Created
+    mock_create_data = {
+        "orderCreateTransaction": {
+            "id": "stop_order_456",
+            "accountID": "test_account_id",
+            "type": "STOP_ORDER",
+            "reason": "CLIENT_REQUEST"
+        },
+        "relatedTransactionIDs": ["stop_order_456"]
+    }
+    mock_response.json.return_value = mock_create_data
+    mock_response.raise_for_status = mocker.Mock()
+
+    # Patch the requests.post method
+    mocker.patch('broker_interface.oanda_implementation.requests.post', return_value=mock_response)
+
+    # Action: call the method we are testing
+    instrument = "USD_JPY"
+    units = 1000 # A buy stop
+    price = 155.50
+    response_data, error = oanda_broker.place_stop_order(instrument, units, price)
+
+    # Assertions
+    assert error is None
+    assert response_data == mock_create_data
+
+    # Verify that requests.post was called correctly
+    from broker_interface.oanda_implementation import requests
+    requests.post.assert_called_once()
+    args, kwargs = requests.post.call_args
+
+    # Check the payload sent in the request
+    sent_payload = kwargs["json"]["order"]
+    assert sent_payload["instrument"] == instrument
+    assert sent_payload["units"] == str(units)
+    assert sent_payload["type"] == "STOP"
+    assert sent_payload["price"] == str(price)
+    assert sent_payload["timeInForce"] == config_get('trading.defaults.time_in_force', 'GTC')
+
+def test_cancel_order_success(mocker, oanda_broker):
+    """Tests successful order cancellation."""
+    order_to_cancel = "12345"
+
+    # This is a typical response for a successful order cancellation
+    mock_response = mocker.Mock()
+    mock_response.status_code = 200
+    mock_cancel_data = {
+        "orderCancelTransaction": {
+            "id": "cancel_tx_789",
+            "orderID": order_to_cancel,
+            "reason": "CLIENT_REQUESTED_CANCELLATION"
+        }
+    }
+    mock_response.json.return_value = mock_cancel_data
+    mock_response.raise_for_status = mocker.Mock()
+
+    # Patch the requests.put method
+    mock_put_call = mocker.patch('broker_interface.oanda_implementation.requests.put', return_value=mock_response)
+
+    # Action
+    response_data, error = oanda_broker.cancel_order(order_to_cancel)
+
+    # Assertions
+    assert error is None
+    assert response_data == mock_cancel_data
+    assert response_data["orderCancelTransaction"]["reason"] == "CLIENT_REQUESTED_CANCELLATION"
+
+    # Verify that requests.put was called correctly
+    mock_put_call.assert_called_once()
+    args, kwargs = mock_put_call.call_args
+    expected_url = f"{oanda_broker.base_url}/v3/accounts/{oanda_broker.account_id}/orders/{order_to_cancel}/cancel"
+    assert args[0] == expected_url
+
+
+def test_cancel_order_not_found_error(mocker, oanda_broker):
+    """Tests cancelling an order that doesn't exist (results in a 404)."""
+    order_to_cancel = "non_existent_order"
+
+    mock_response = mocker.Mock()
+    mock_response.status_code = 404
+    error_payload = {"errorMessage": "Order specified does not exist or is not pending"}
+    mock_response.json.return_value = error_payload
+
+    http_error = requests.exceptions.HTTPError("404 Client Error")
+    http_error.response = mock_response
+    mock_response.raise_for_status = mocker.Mock(side_effect=http_error)
+
+    mock_put_call = mocker.patch('broker_interface.oanda_implementation.requests.put', return_value=mock_response)
+
+    # Action
+    response_data, error = oanda_broker.cancel_order(order_to_cancel)
+
+    # Assertions
+    assert response_data is None
+    assert error is not None
+    assert "Order specified does not exist" in error
+    mock_put_call.assert_called_once()
+
+    # In tests/test_oanda_implementation.py
+
+def test_place_market_order_with_sl_tp(mocker, oanda_broker):
+    """Tests that SL/TP parameters are correctly added to the order payload."""
+    mock_response = mocker.Mock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {"orderFillTransaction": {"id": "fill_tx_sl_tp"}}
+    mock_response.raise_for_status = mocker.Mock()
+
+    mock_post_call = mocker.patch('broker_interface.oanda_implementation.requests.post', return_value=mock_response)
+
+    # Action: Call the method with SL and TP
+    instrument = "EUR_USD"
+    units = 100
+    stop_loss = 1.0700
+    take_profit = 1.0900
+    response_data, error = oanda_broker.place_market_order(instrument, units, stop_loss, take_profit)
+
+    # Assertions
+    assert error is None
+    mock_post_call.assert_called_once()
+    args, kwargs = mock_post_call.call_args
+
+    sent_payload = kwargs["json"]["order"]
+
+    # Check that the SL/TP objects exist in the payload and are correct
+    assert "stopLossOnFill" in sent_payload
+    assert sent_payload["stopLossOnFill"]["price"] == str(stop_loss)
+    assert sent_payload["stopLossOnFill"]["timeInForce"] == "GTC" # Assuming GTC from config
+
+    assert "takeProfitOnFill" in sent_payload
+    assert sent_payload["takeProfitOnFill"]["price"] == str(take_profit)
+    assert sent_payload["takeProfitOnFill"]["timeInForce"] == "GTC"

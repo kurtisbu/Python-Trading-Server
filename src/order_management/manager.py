@@ -96,89 +96,105 @@ def create_order_record(signal_data: dict, processed_params: dict):
             conn.close()
 
 def update_order_with_submission_response(internal_order_id: str, oanda_response: dict = None, oanda_error: str = None):
-    now_utc_iso = datetime.now(timezone.utc).isoformat()
+    """
+    Updates an existing order record with the response from a broker after submission.
+    This function is now generic and can parse responses from different brokers.
+    """
+    # For clarity, let's rename the main response variable
+    broker_response = oanda_response
+    broker_error = oanda_error
 
-    # Prepare base fields for update
-    fields_to_update = {
-        "timestamp_updated": now_utc_iso,
-        "broker_response_json": json.dumps(oanda_response) if oanda_response else None
-    }
+    now_utc = datetime.now(timezone.utc)
+    updated_record = None
 
-    current_status = "ERROR_UPDATING" # Default if logic below doesn't set it
-
-    if oanda_error:
-        current_status = "ERROR_SUBMITTING"
-        if "Oanda Error:" in oanda_error or "Oanda Order Reject Reason:" in oanda_error:
-            current_status = "REJECTED_BY_BROKER"
-        fields_to_update["error_message"] = oanda_error
-        logger.error(f"Order ID {internal_order_id} failed. Error: {oanda_error}. Response: {oanda_response}")
-
-    elif oanda_response:
-        current_status = "SUBMITTED_TO_BROKER" # Default successful submission status
-        # Parse Oanda response for more specific status and details
-        if "orderFillTransaction" in oanda_response:
-            fill_tx = oanda_response["orderFillTransaction"]
-            current_status = "FILLED"
-            fields_to_update["oanda_order_id"] = fill_tx.get("orderID")
-            if fill_tx.get("tradeOpened"):
-                fields_to_update["oanda_trade_id"] = fill_tx.get("tradeOpened", {}).get("tradeID")
-            elif fill_tx.get("tradesClosed"):
-                fields_to_update["oanda_trade_id"] = fill_tx.get("tradesClosed", [{}])[0].get("tradeID") 
-            elif fill_tx.get("tradeReduced"):
-                fields_to_update["oanda_trade_id"] = fill_tx.get("tradeReduced", {}).get("tradeID")
-            fields_to_update["fill_price"] = float(fill_tx.get("price", 0.0))
-            fields_to_update["fill_quantity"] = float(fill_tx.get("units", 0.0))
-            logger.info(f"Order ID {internal_order_id} FILLED. Oanda Order ID: {fields_to_update.get('oanda_order_id')}, Trade ID: {fields_to_update.get('oanda_trade_id')}")
-
-        elif "orderCreateTransaction" in oanda_response:
-            create_tx = oanda_response["orderCreateTransaction"]
-            current_status = "ORDER_ACCEPTED"
-            fields_to_update["oanda_order_id"] = create_tx.get("id")
-            logger.info(f"Order ID {internal_order_id} ACCEPTED by Oanda. Oanda Order ID: {fields_to_update.get('oanda_order_id')}")
-
-        elif "orderCancelTransaction" in oanda_response:
-            cancel_tx = oanda_response["orderCancelTransaction"]
-            current_status = "CANCELLED_BY_BROKER"
-            fields_to_update["oanda_order_id"] = cancel_tx.get("orderID")
-            fields_to_update["error_message"] = f"Order cancelled by broker. Reason: {cancel_tx.get('reason')}"
-            logger.warning(f"Order ID {internal_order_id} CANCELLED by Oanda. Reason: {cancel_tx.get('reason')}")
-
-        elif "orderRejectTransaction" in oanda_response:
-            reject_tx = oanda_response["orderRejectTransaction"]
-            current_status = "REJECTED_BY_BROKER"
-            fields_to_update["oanda_order_id"] = reject_tx.get("id") # May be present
-            fields_to_update["error_message"] = f"Order rejected by broker. Reason: {reject_tx.get('rejectReason')}"
-            logger.error(f"Order ID {internal_order_id} REJECTED by Oanda. Reason: {reject_tx.get('rejectReason')}")
-        else:
-            logger.warning(f"Order ID {internal_order_id} submitted, but response format not fully parsed: {oanda_response}")
-
-    fields_to_update["status"] = current_status
-
-    # Build SQL UPDATE statement dynamically
-    set_clauses = ", ".join([f"{key} = ?" for key in fields_to_update.keys()])
-    values = list(fields_to_update.values())
-    values.append(internal_order_id) # For the WHERE clause
-
-    sql = f"UPDATE orders SET {set_clauses} WHERE internal_order_id = ?"
-
-    updated_row_dict = None
+    # This part of the logic remains the same
+    db_uri_for_verification = f"file:{DATABASE_PATH}?mode=rw" # Ensure we can write
+    conn = None
     try:
-        conn = get_db_connection()
+        conn = sqlite3.connect(db_uri_for_verification, uri=True)
+        conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
+
+        # Find the order to update
+        cursor.execute("SELECT * FROM orders WHERE internal_order_id = ?", (internal_order_id,))
+        order_row = cursor.fetchone()
+        if not order_row:
+            logger.error(f"Could not find order with internal_order_id: {internal_order_id} to update.")
+            return None
+
+        # --- THIS IS THE UPDATED LOGIC ---
+
+        fields_to_update = {
+            "timestamp_updated": now_utc.isoformat(),
+            "broker_response_json": json.dumps(broker_response) if broker_response else None
+        }
+
+        if broker_error:
+            fields_to_update["status"] = "ERROR_SUBMITTING"
+            if "Oanda" in broker_error or "Alpaca" in broker_error:
+                fields_to_update["status"] = "REJECTED_BY_BROKER"
+            fields_to_update["error_message"] = broker_error
+            logger.error(f"Order ID {internal_order_id} failed. Error: {broker_error}. Response: {broker_response}")
+        elif broker_response:
+            fields_to_update["status"] = "SUBMITTED_TO_BROKER" # Default success status
+
+            # Try to parse Oanda-style responses
+            if "orderFillTransaction" in broker_response:
+                fill_tx = broker_response["orderFillTransaction"]
+                fields_to_update["status"] = "FILLED"
+                fields_to_update["oanda_order_id"] = fill_tx.get("orderID")
+                # ... (rest of Oanda fill parsing logic as before)
+                if fill_tx.get("tradeOpened"):
+                    fields_to_update["oanda_trade_id"] = fill_tx.get("tradeOpened", {}).get("tradeID")
+                fields_to_update["fill_price"] = float(fill_tx.get("price", 0.0))
+                fields_to_update["fill_quantity"] = float(fill_tx.get("units", 0.0))
+
+            elif "orderCreateTransaction" in broker_response:
+                create_tx = broker_response["orderCreateTransaction"]
+                fields_to_update["status"] = "ORDER_ACCEPTED"
+                fields_to_update["oanda_order_id"] = create_tx.get("id") # Oanda's ID for pending orders
+
+            elif "orderCancelTransaction" in broker_response:
+                cancel_tx = broker_response["orderCancelTransaction"]
+                fields_to_update["status"] = "CANCELLED" # Simplified status
+                fields_to_update["oanda_order_id"] = cancel_tx.get("orderID")
+                fields_to_update["error_message"] = f"Order cancelled by broker. Reason: {cancel_tx.get('reason')}"
+
+            # Try to parse Alpaca-style responses
+            # A successful Alpaca order submission returns an order entity
+            elif "id" in broker_response and "client_order_id" in broker_response:
+                # Check the status from Alpaca to set our internal status
+                alpaca_status = broker_response.get("status")
+                if alpaca_status in ["accepted", "pending_new", "new"]:
+                    fields_to_update["status"] = "ORDER_ACCEPTED"
+                elif alpaca_status == "filled":
+                    fields_to_update["status"] = "FILLED"
+                    # Parse fill details if available
+                    fields_to_update["fill_quantity"] = float(broker_response.get("filled_qty", 0.0))
+                    fields_to_update["fill_price"] = float(broker_response.get("filled_avg_price", 0.0))
+
+                # This is the key fix: get the order ID from Alpaca's `id` field
+                fields_to_update["oanda_order_id"] = broker_response.get("id")
+
+        # --- END OF UPDATED LOGIC ---
+
+        set_clauses = ", ".join([f"{key} = ?" for key in fields_to_update.keys()])
+        values = list(fields_to_update.values())
+        values.append(internal_order_id)
+        sql = f"UPDATE orders SET {set_clauses} WHERE internal_order_id = ?"
         cursor.execute(sql, values)
         conn.commit()
-        if cursor.rowcount == 0:
-            logger.error(f"Could not find order with internal_order_id: {internal_order_id} to update in DB.")
-            return None
-        logger.info(f"Order ID {internal_order_id} updated in DB. Status: {current_status}")
-        # Fetch the updated row to return it
-        updated_row_dict = get_order_by_id(internal_order_id) # Will re-open/close connection
+
+        logger.info(f"Order ID {internal_order_id} updated in DB. New status: {fields_to_update.get('status')}")
+        # Fetch and return the fully updated record
+        return get_order_by_id(internal_order_id) # Uses its own connection
+
     except sqlite3.Error as e:
         logger.error(f"Failed to update order ID {internal_order_id} in DB: {e}", exc_info=True)
+        return None
     finally:
         if conn:
             conn.close()
-    return updated_row_dict
 
 
 def _db_row_to_dict(row: sqlite3.Row):
